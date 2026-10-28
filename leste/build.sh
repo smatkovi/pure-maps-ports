@@ -142,6 +142,9 @@ qmake_part() {
 	shift 2
 	qmake_setup
 	log "$name"
+	# afresh: the subdirectories' Makefiles stay otherwise, with the
+	# arguments of the run that made them
+	rm -rf "$b"
 	mkdir -p "$b"
 	(cd "$b" && "$W/qmake/qmake" "$W/src/$name/$pro" "$@") > "$W/$name.qmake.log" 2>&1 ||
 	    { tail -30 "$W/$name.qmake.log"; exit 1; }
