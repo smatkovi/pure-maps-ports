@@ -1,63 +1,77 @@
 /*
- * A Qt Positioning source on Maemo Leste's location-daemon (see
+ * A Qt Positioning source on Maemo Leste's liblocation (see
  * positionsource.h).
  *
  * This library is free software; you can redistribute it and/or modify it
  * under the terms of the GNU Lesser General Public License version 2.1 or
  * (at your option) any later version.
  */
+// GLib's headers before Qt's (Qt's "signals" keyword)
+#include <gconf/gconf-client.h>
+#include <location/location-gps-device.h>
+#include <location/location-gpsd-control.h>
+
 #include "positionsource.h"
 
 #include <QDBusConnection>
 #include <QDBusConnectionInterface>
-#include <QDBusMessage>
-#include <QDBusServiceWatcher>
 #include <QtMath>
-
-#include <fcntl.h>
-#include <sys/file.h>
-#include <unistd.h>
 
 namespace {
 const char Service[] = "org.maemo.LocationDaemon";
-const char Path[] = "/org/maemo/LocationDaemon";
-// liblocation's lock: the daemon exits when nobody holds it shared
-const char LockPath[] = "/run/lock/location-daemon.lock";
-// gpsd's fix modes, as the daemon sends them
-enum { ModeNotSeen, ModeNoFix, Mode2D, Mode3D };
 // a cold GPS can take this long for its first fix
 const int DefaultRequestTimeout = 120000;
 
-QString interface(const char *name)
+// whether Leste's location privacy disclaimer was accepted (liblocation
+// shows it, through location-ui, when a control starts before)
+bool disclaimerAccepted()
 {
-    return QString::fromLatin1(Service) + QLatin1Char('.') + QLatin1String(name);
+    GConfClient *client = gconf_client_get_default();
+    const gboolean accepted = gconf_client_get_bool(
+        client, "/system/nokia/location/disclaimer-accepted", NULL);
+    g_object_unref(client);
+    return accepted;
+}
+
+// liblocation's intervals, the shortest one not shorter than msec
+LocationGPSDControlInterval controlInterval(int msec)
+{
+    static const LocationGPSDControlInterval intervals[] = {
+        LOCATION_INTERVAL_1S, LOCATION_INTERVAL_2S, LOCATION_INTERVAL_5S,
+        LOCATION_INTERVAL_10S, LOCATION_INTERVAL_20S, LOCATION_INTERVAL_30S,
+        LOCATION_INTERVAL_60S, LOCATION_INTERVAL_120S
+    };
+    for (LocationGPSDControlInterval i : intervals)
+        if (msec <= int(i))
+            return i;
+    return LOCATION_INTERVAL_120S;
 }
 }
 
 LestePositionSource::LestePositionSource(QObject *parent)
     : QGeoPositionInfoSource(parent)
-    , m_mode(ModeNotSeen)
-    , m_lat(qQNaN()), m_lon(qQNaN()), m_alt(qQNaN())
-    , m_speed(qQNaN()), m_track(qQNaN()), m_climb(qQNaN())
-    , m_epv(qQNaN()), m_eph(qQNaN())
-    , m_havePosition(false)
+    , m_control(nullptr)
+    , m_controlStarted(false)
+    , m_device(nullptr)
     , m_running(false)
     , m_requested(false)
-    , m_lockFd(-1)
-    , m_watcher(nullptr)
     , m_error(NoError)
 {
-    // the daemon sends one gpsd report as several signals, one after another
-    m_flush.setSingleShot(true);
-    m_flush.setInterval(50);
-    connect(&m_flush, &QTimer::timeout, this, &LestePositionSource::flush);
     m_requestTimer.setSingleShot(true);
     connect(&m_requestTimer, &QTimer::timeout, this, &LestePositionSource::requestTimedOut);
+
+    // the device follows the daemon's signals (through GLib's main loop,
+    // which is Qt's here) and starts with the last known fix
+    m_device = LOCATION_GPS_DEVICE(g_object_new(LOCATION_TYPE_GPS_DEVICE, NULL));
+    g_signal_connect(m_device, "changed", G_CALLBACK(deviceChanged), this);
+    m_last = fix(false);
 }
 
 LestePositionSource::~LestePositionSource()
 {
-    stopDaemon();
+    releaseControl();
+    g_signal_handlers_disconnect_by_data(m_device, this);
+    g_object_unref(m_device);
 }
 
 bool LestePositionSource::available()
@@ -98,7 +112,7 @@ void LestePositionSource::setError(Error error)
 
 void LestePositionSource::startUpdates()
 {
-    if (startDaemon())
+    if (startControl())
         m_running = true;
 }
 
@@ -106,7 +120,7 @@ void LestePositionSource::stopUpdates()
 {
     m_running = false;
     if (!m_requested)
-        stopDaemon();
+        stopControl();
 }
 
 void LestePositionSource::requestUpdate(int timeout)
@@ -117,7 +131,7 @@ void LestePositionSource::requestUpdate(int timeout)
         emit updateTimeout();
         return;
     }
-    if (!startDaemon())
+    if (!startControl())
         return;
     m_requested = true;
     m_requestTimer.start(timeout);
@@ -127,168 +141,162 @@ void LestePositionSource::requestTimedOut()
 {
     m_requested = false;
     if (!m_running)
-        stopDaemon();
+        stopControl();
     emit updateTimeout();
 }
 
-bool LestePositionSource::startDaemon()
+bool LestePositionSource::startControl()
 {
-    if (m_lockFd >= 0)
-        return true;
-    m_lockFd = ::open(LockPath, O_CREAT | O_RDONLY | O_CLOEXEC, 0666);
-    if (m_lockFd >= 0 && ::flock(m_lockFd, LOCK_SH) != 0) {
-        ::close(m_lockFd);
-        m_lockFd = -1;
+    if (!m_control) {
+        // a control holds liblocation's lock from its creation to its
+        // end: the daemon and gpsd stay while one is there
+        m_control = location_gpsd_control_get_default();
+        if (!m_control) {
+            setError(UnknownSourceError);
+            return false;
+        }
+        g_signal_connect(m_control, "error-verbose", G_CALLBACK(controlError), this);
+        g_signal_connect(m_control, "gpsd-running", G_CALLBACK(gpsdRunning), this);
     }
-    if (m_lockFd < 0) {
-        setError(AccessError);
-        return false;
-    }
-
-    QDBusConnection bus = QDBusConnection::systemBus();
-    bus.connect(Service, Path, interface("Device"), "FixStatusChanged",
-                this, SLOT(fixStatusChanged(uchar)));
-    bus.connect(Service, Path, interface("Time"), "TimeChanged",
-                this, SLOT(timeChanged(qlonglong, qlonglong)));
-    bus.connect(Service, Path, interface("Position"), "PositionChanged",
-                this, SLOT(positionChanged(double, double, double)));
-    bus.connect(Service, Path, interface("Course"), "CourseChanged",
-                this, SLOT(courseChanged(double, double, double)));
-    bus.connect(Service, Path, interface("Accuracy"), "AccuracyChanged",
-                this, SLOT(accuracyChanged(double, double, double, double, double, double)));
-
-    m_watcher = new QDBusServiceWatcher(Service, bus, QDBusServiceWatcher::WatchForUnregistration, this);
-    connect(m_watcher, &QDBusServiceWatcher::serviceUnregistered, this, &LestePositionSource::daemonGone);
-
-    // a call to it starts it (D-Bus activation), as liblocation does
-    bus.send(QDBusMessage::createMethodCall(Service, Path, Service, "start"));
     m_error = NoError;
+    if (!m_controlStarted) {
+        g_object_set(m_control,
+                     "preferred-method", LOCATION_METHOD_USER_SELECTED,
+                     "preferred-interval", controlInterval(updateInterval()),
+                     NULL);
+        // asks for the disclaimer or for GPS to be switched on, if needed
+        location_gpsd_control_start(m_control);
+        m_controlStarted = true;
+    }
     return true;
 }
 
-void LestePositionSource::stopDaemon()
+void LestePositionSource::stopControl()
 {
-    if (m_lockFd < 0)
-        return;
-    QDBusConnection bus = QDBusConnection::systemBus();
-    bus.disconnect(Service, Path, interface("Device"), "FixStatusChanged",
-                   this, SLOT(fixStatusChanged(uchar)));
-    bus.disconnect(Service, Path, interface("Time"), "TimeChanged",
-                   this, SLOT(timeChanged(qlonglong, qlonglong)));
-    bus.disconnect(Service, Path, interface("Position"), "PositionChanged",
-                   this, SLOT(positionChanged(double, double, double)));
-    bus.disconnect(Service, Path, interface("Course"), "CourseChanged",
-                   this, SLOT(courseChanged(double, double, double)));
-    bus.disconnect(Service, Path, interface("Accuracy"), "AccuracyChanged",
-                   this, SLOT(accuracyChanged(double, double, double, double, double, double)));
-    delete m_watcher;
-    m_watcher = nullptr;
-    m_flush.stop();
     m_requestTimer.stop();
     m_requested = false;
-    // closing it lets the lock go: the daemon (and gpsd's watch) end
-    // when no other program holds one
-    ::close(m_lockFd);
-    m_lockFd = -1;
-}
-
-void LestePositionSource::daemonGone()
-{
-    // it went away while wanted (it crashed, or it was restarted):
-    // start it again
-    if (m_lockFd < 0)
+    // Leste's liblocation takes the disclaimer dialog's state, when a
+    // control starts while the dialog is still there, for the user's
+    // answer, and that is "accepted" while it is unanswered. So a control
+    // that may have shown the dialog stays (started) until the answer:
+    // gpsd does not run before, so its lock costs nothing.
+    if (m_controlStarted && !disclaimerAccepted())
         return;
-    QTimer::singleShot(2000, this, [this]() {
-        if (m_lockFd >= 0)
-            QDBusConnection::systemBus().send(
-                QDBusMessage::createMethodCall(Service, Path, Service, "start"));
-    });
+    releaseControl();
 }
 
-void LestePositionSource::fixStatusChanged(uchar mode)
+void LestePositionSource::releaseControl()
 {
-    // the first signal of a report: the one before is complete
-    if (m_flush.isActive()) {
-        m_flush.stop();
-        flush();
+    if (!m_control)
+        return;
+    g_signal_handlers_disconnect_by_data(m_control, this);
+    if (m_controlStarted)
+        location_gpsd_control_stop(m_control);
+    g_object_unref(m_control);
+    m_control = nullptr;
+    m_controlStarted = false;
+}
+
+// (liblocation goes on with the control after its signals: it is let go
+// after them)
+void LestePositionSource::gpsdRunning(_LocationGPSDControl *, void *self)
+{
+    // gpsd started for a control kept for the disclaimer's answer
+    LestePositionSource *s = static_cast<LestePositionSource *>(self);
+    QMetaObject::invokeMethod(s, [s]() {
+        if (!s->m_running && !s->m_requested)
+            s->releaseControl();
+    }, Qt::QueuedConnection);
+}
+
+void LestePositionSource::controlError(_LocationGPSDControl *, int error, void *self)
+{
+    LestePositionSource *s = static_cast<LestePositionSource *>(self);
+    // the control does not start gpsd (a dialog was rejected): a start
+    // after this one asks again
+    s->m_controlStarted = false;
+    QMetaObject::invokeMethod(s, [s]() {
+        if (!s->m_running && !s->m_requested)
+            s->releaseControl();
+    }, Qt::QueuedConnection);
+    switch (error) {
+    case LOCATION_ERROR_USER_REJECTED_DIALOG:
+    case LOCATION_ERROR_USER_REJECTED_SETTINGS:
+    case LOCATION_ERROR_METHOD_NOT_ALLOWED_IN_OFFLINE_MODE:
+        s->setError(AccessError);
+        break;
+    default:
+        s->setError(ClosedError);
+        break;
     }
-    m_mode = mode;
-    m_time = QDateTime();
-    m_havePosition = false;
-    m_lat = m_lon = m_alt = qQNaN();
-    m_speed = m_track = m_climb = qQNaN();
-    m_epv = m_eph = qQNaN();
-    m_flush.start();
 }
 
-void LestePositionSource::timeChanged(qlonglong sec, qlonglong nsec)
+void LestePositionSource::deviceChanged(_LocationGPSDevice *, void *self)
 {
-    m_time = QDateTime::fromMSecsSinceEpoch(sec * 1000 + nsec / 1000000, Qt::UTC);
-    m_flush.start();
+    static_cast<LestePositionSource *>(self)->fixChanged();
 }
 
-void LestePositionSource::positionChanged(double lat, double lon, double alt)
+// the device's fix; only a current one (a 2D or 3D fix) if current
+QGeoPositionInfo LestePositionSource::fix(bool current) const
 {
-    m_lat = lat;
-    m_lon = lon;
-    m_alt = alt;
-    m_havePosition = true;
-    m_flush.start();
+    const LocationGPSDeviceFix *f = m_device->fix;
+    if (!f || !(f->fields & LOCATION_GPS_DEVICE_LATLONG_SET)
+        || !qIsFinite(f->latitude) || !qIsFinite(f->longitude))
+        return QGeoPositionInfo();
+    const bool fix3d = f->mode == LOCATION_GPS_DEVICE_MODE_3D;
+    if (current && !fix3d && f->mode != LOCATION_GPS_DEVICE_MODE_2D)
+        return QGeoPositionInfo();
+
+    QGeoCoordinate c(f->latitude, f->longitude);
+    if (fix3d && (f->fields & LOCATION_GPS_DEVICE_ALTITUDE_SET) && qIsFinite(f->altitude))
+        c.setAltitude(f->altitude);
+    QDateTime t;
+    if ((f->fields & LOCATION_GPS_DEVICE_TIME_SET) && qIsFinite(f->time))
+        t = QDateTime::fromMSecsSinceEpoch(qint64(f->time * 1000), Qt::UTC);
+    else if (current)
+        t = QDateTime::currentDateTimeUtc();
+    else
+        return QGeoPositionInfo();
+
+    QGeoPositionInfo info(c, t);
+    if ((f->fields & LOCATION_GPS_DEVICE_SPEED_SET) && qIsFinite(f->speed))
+        info.setAttribute(QGeoPositionInfo::GroundSpeed, f->speed / 3.6);  // km/h
+    if ((f->fields & LOCATION_GPS_DEVICE_TRACK_SET) && qIsFinite(f->track))
+        info.setAttribute(QGeoPositionInfo::Direction, f->track);
+    if (fix3d && (f->fields & LOCATION_GPS_DEVICE_CLIMB_SET) && qIsFinite(f->climb))
+        info.setAttribute(QGeoPositionInfo::VerticalSpeed, f->climb);
+    // Leste's liblocation passes gpsd's metres (Maemo 5's was centimetres)
+    if (qIsFinite(f->eph))
+        info.setAttribute(QGeoPositionInfo::HorizontalAccuracy, f->eph);
+    if (fix3d && qIsFinite(f->epv))
+        info.setAttribute(QGeoPositionInfo::VerticalAccuracy, f->epv);
+    return info;
 }
 
-void LestePositionSource::courseChanged(double speed, double track, double climb)
+void LestePositionSource::fixChanged()
 {
-    m_speed = speed;
-    m_track = track;
-    m_climb = climb;
-    m_flush.start();
-}
-
-void LestePositionSource::accuracyChanged(double, double epv, double, double, double, double eph)
-{
-    m_epv = epv;
-    m_eph = eph;
-    m_flush.start();
-}
-
-void LestePositionSource::flush()
-{
-    if (!m_havePosition || m_mode < Mode2D || !qIsFinite(m_lat) || !qIsFinite(m_lon))
+    // the device follows the daemon also when another program started it
+    if (!m_control)
         return;
-
-    QGeoCoordinate c(m_lat, m_lon);
-    if (m_mode == Mode3D && qIsFinite(m_alt))
-        c.setAltitude(m_alt);
-    const QDateTime t = m_time.isValid() ? m_time : QDateTime::currentDateTimeUtc();
+    const QGeoPositionInfo info = fix(true);
+    if (!info.isValid())
+        return;
 
     if (m_last.isValid()) {
-        // gpsd reports a fix again with each message it reads
-        if (m_last.coordinate() == c && m_last.timestamp() == t)
+        if (m_last.coordinate() == info.coordinate() && m_last.timestamp() == info.timestamp())
             return;
         // not more often than asked for
         if (!m_requested && updateInterval() > minimumUpdateInterval()
-            && m_last.timestamp().msecsTo(t) < updateInterval())
+            && m_last.timestamp().msecsTo(info.timestamp()) < updateInterval())
             return;
     }
-
-    QGeoPositionInfo info(c, t);
-    if (qIsFinite(m_speed))
-        info.setAttribute(QGeoPositionInfo::GroundSpeed, m_speed);
-    if (qIsFinite(m_track))
-        info.setAttribute(QGeoPositionInfo::Direction, m_track);
-    if (qIsFinite(m_climb) && m_mode == Mode3D)
-        info.setAttribute(QGeoPositionInfo::VerticalSpeed, m_climb);
-    if (qIsFinite(m_eph))
-        info.setAttribute(QGeoPositionInfo::HorizontalAccuracy, m_eph);
-    if (qIsFinite(m_epv) && m_mode == Mode3D)
-        info.setAttribute(QGeoPositionInfo::VerticalAccuracy, m_epv);
     m_last = info;
 
     if (m_requested) {
         m_requested = false;
         m_requestTimer.stop();
         if (!m_running)
-            stopDaemon();
+            stopControl();
         emit positionUpdated(info);
     } else if (m_running) {
         emit positionUpdated(info);

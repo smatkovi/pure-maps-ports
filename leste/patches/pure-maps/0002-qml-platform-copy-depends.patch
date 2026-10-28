@@ -1,0 +1,14 @@
+diff --git a/qml/CMakeLists.txt b/qml/CMakeLists.txt
+index 2e47657c..9e5e983b 100644
+--- a/qml/CMakeLists.txt
++++ b/qml/CMakeLists.txt
+@@ -14,7 +14,8 @@ foreach(_FILE ${_PLATFORM_FILES})
+     # Copy and dereference the file
+     add_custom_command(OUTPUT ${_RESULT}
+         COMMAND mkdir -p ${CMAKE_CURRENT_BINARY_DIR}/platform
+-        COMMAND cp -L -v ${_FILE} ${_RESULT})
++        COMMAND cp -L -v ${_FILE} ${_RESULT}
++        DEPENDS ${_FILE})
+     add_custom_target(install_${_FILENAME} ALL
+         DEPENDS ${_RESULT})
+ 

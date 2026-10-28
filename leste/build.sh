@@ -17,16 +17,33 @@ JOBS=${JOBS:-$(nproc)}
 log() { echo ">> $*"; }
 
 # The arm64 root to build against (and to make the packages in)
-if ! docker image inspect "$IMAGE" > /dev/null 2>&1; then
+# (made again when the Dockerfile changes: Docker reuses its unchanged steps)
+mkdir -p "$W"
+if ! docker image inspect "$IMAGE" > /dev/null 2>&1 ||
+    ! cmp -s "$TOP/leste/Dockerfile" "$W/image.Dockerfile"; then
 	log "image $IMAGE"
-	docker build --platform linux/arm64 -t "$IMAGE" "$TOP/leste" > "$W/image.log" 2>&1
+	docker build --platform linux/arm64 -t "$IMAGE" "$TOP/leste" > "$W/image.log" 2>&1 ||
+	    { tail -20 "$W/image.log"; exit 1; }
+	cp "$TOP/leste/Dockerfile" "$W/image.Dockerfile"
+	rm -f "$LESTE_SYSROOT/.done"
 fi
 if [ ! -f "$LESTE_SYSROOT/.done" ]; then
+	rm -rf "${LESTE_SYSROOT:?}"
 	log "sysroot"
 	mkdir -p "$LESTE_SYSROOT"
 	c=$(docker create --platform linux/arm64 "$IMAGE")
 	docker export "$c" | tar -x -C "$LESTE_SYSROOT" --anchored --exclude=proc --exclude=sys --exclude=dev
 	docker rm "$c" > /dev/null
+	# links to /lib/... (libz.so, libdbus-1.so) would name the PC's files:
+	# relative ones, within the root
+	find "$LESTE_SYSROOT" -type l -lname '/*' -print0 |
+	    while IFS= read -r -d '' l; do
+		ln -sfnr "$LESTE_SYSROOT$(readlink "$l")" "$l"
+	done
+	# with the parts built before
+	for r in "$W"/root/*/; do
+		[ -d "$r" ] && cp -a "$r." "$LESTE_SYSROOT/"
+	done
 	touch "$LESTE_SYSROOT/.done"
 fi
 export PKG_CONFIG_SYSROOT_DIR=$LESTE_SYSROOT
@@ -207,7 +224,9 @@ if want qtposition-leste "$@"; then
 	mkdir -p "$W/src"
 	cp -a "$TOP/leste/qtposition-leste" "$W/src/"
 	cmake_part qtposition-leste -DQT_INSTALL_PLUGINS=/usr/lib/aarch64-linux-gnu/qt5/plugins
-	deb qtposition-leste libqt5positioning5-plugin-leste "$QTPOSITIONLESTE_VERSION" libs "" \
+	# liblocation is Leste's (dpkg -S in the image does not know it)
+	deb qtposition-leste libqt5positioning5-plugin-leste "$QTPOSITIONLESTE_VERSION" libs \
+	    "liblocation0 (>= 0.108), location-daemon" \
 	    "Qt Positioning plugin for Maemo Leste's location-daemon (GPS through gpsd)"
 fi
 if want mapbox-gl-qml "$@"; then

@@ -1,7 +1,9 @@
 /*
- * A Qt Positioning source on Maemo Leste's location-daemon: the GPS fixes
- * gpsd has, as the daemon sends them on the system bus
- * (org.maemo.LocationDaemon), the way liblocation reads them.
+ * A Qt Positioning source on Maemo Leste's liblocation: the GPS fixes of
+ * gpsd, which Leste's location-daemon sends on the system bus. Through
+ * liblocation the source keeps to Leste's location settings (the method,
+ * GPS on or off), Leste asks for the privacy disclaimer the first time,
+ * and the daemon and gpsd stop when no program wants a position.
  *
  * This library is free software; you can redistribute it and/or modify it
  * under the terms of the GNU Lesser General Public License version 2.1 or
@@ -13,7 +15,8 @@
 #include <QGeoPositionInfoSource>
 #include <QTimer>
 
-class QDBusServiceWatcher;
+struct _LocationGPSDControl;
+struct _LocationGPSDevice;
 
 class LestePositionSource : public QGeoPositionInfoSource
 {
@@ -37,35 +40,27 @@ public slots:
     void requestUpdate(int timeout = 0) override;
 
 private slots:
-    void fixStatusChanged(uchar mode);
-    void timeChanged(qlonglong sec, qlonglong nsec);
-    void positionChanged(double lat, double lon, double alt);
-    void courseChanged(double speed, double track, double climb);
-    void accuracyChanged(double ept, double epv, double epd, double eps, double epc, double eph);
-    void flush();
     void requestTimedOut();
-    void daemonGone();
 
 private:
-    bool startDaemon();
-    void stopDaemon();
+    static void deviceChanged(_LocationGPSDevice *device, void *self);
+    static void controlError(_LocationGPSDControl *control, int error, void *self);
+    static void gpsdRunning(_LocationGPSDControl *control, void *self);
+
+    QGeoPositionInfo fix(bool current) const;
+    void fixChanged();
+    bool startControl();
+    void stopControl();
+    void releaseControl();
     void setError(Error error);
 
+    _LocationGPSDControl *m_control;    // while positions are wanted
+    bool m_controlStarted;
+    _LocationGPSDevice *m_device;
     QGeoPositionInfo m_last;
-    // what the daemon sent for the gpsd report being read
-    int m_mode;
-    QDateTime m_time;
-    double m_lat, m_lon, m_alt;
-    double m_speed, m_track, m_climb;
-    double m_epv, m_eph;
-    bool m_havePosition;
-
     bool m_running;         // startUpdates
     bool m_requested;       // requestUpdate
-    int m_lockFd;           // shared lock: the daemon stays while it is held
-    QTimer m_flush;         // one report's signals come together
     QTimer m_requestTimer;
-    QDBusServiceWatcher *m_watcher;
     Error m_error;
 };
 

@@ -32,14 +32,25 @@ routes without one.
 ## What is different on Leste
 
 - **GPS.** Leste reads the GPS through gpsd and its own location-daemon,
-  which sends the fixes on the system bus (`org.maemo.LocationDaemon`).
-  There is no Qt Positioning plugin for it, and GeoClue has no gpsd
-  source, so this repository has one: `leste/qtposition-leste`. It starts
-  the daemon the way liblocation does (D-Bus activation and a shared lock
-  on `/run/lock/location-daemon.lock`, so the daemon and gpsd stop again
-  when no program needs them). It puts each gpsd report's signals together
-  into one position with speed, direction and accuracy. Where it finds no
-  location-daemon it creates no source, so Qt uses the next plugin.
+  which sends the fixes on the system bus; programs use them through
+  liblocation, as on Maemo 5. There is no Qt Positioning plugin for it, and
+  GeoClue has no gpsd source, so this repository has one:
+  `leste/qtposition-leste`. It is a liblocation client like Leste's own
+  programs. It keeps to the location settings, the first time it shows
+  Leste's location privacy disclaimer, and the daemon and gpsd stop when no
+  program wants a position. It turns liblocation's fixes into Qt positions
+  with speed, direction and accuracy. Where it finds no location-daemon it
+  makes no source, so Qt uses the next plugin.
+
+  Leste's liblocation (0.108) has two quirks the plugin works around.
+  `liblocation.so.0` is not linked to the GLib, dbus-glib and GConf
+  libraries it uses, so the plugin links them. And when a liblocation
+  client starts while the disclaimer dialog is still open, liblocation
+  takes the dialog's unanswered state for "accepted". So the plugin keeps
+  its control until the dialog is answered instead of making a new one,
+  and gpsd does not run before that. Other programs that start
+  liblocation while the dialog is open can still set the disclaimer to
+  accepted.
 - **Screen blanking.** While Pure Maps navigates it keeps the display on.
   Upstream does this through `org.freedesktop.ScreenSaver`, which Leste does
   not have. The Leste package asks MCE (`req_display_blanking_pause`)
