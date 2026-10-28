@@ -97,15 +97,17 @@ on FreeBSD is Qt's own (GeoClue 2 if it runs).
   with speed, direction and accuracy. Where it finds no location-daemon it
   makes no source, so Qt uses the next plugin.
 
-  Leste's liblocation (0.108) has two quirks the plugin works around.
-  `liblocation.so.0` is not linked to the GLib, dbus-glib and GConf
-  libraries it uses, so the plugin links them. And when a liblocation
-  client starts while the disclaimer dialog is still open, liblocation
-  takes the dialog's unanswered state for "accepted". So the plugin keeps
-  its control until the dialog is answered instead of making a new one,
-  and gpsd does not run before that. Other programs that start
-  liblocation while the dialog is open can still set the disclaimer to
-  accepted.
+  Leste's location framework has two bugs the plugin works around.
+  `liblocation.so.0` (0.108) is not linked to the GLib, dbus-glib and
+  GConf libraries it uses, so the plugin links them. And location-ui
+  (0.96) starts its dialogs with the answer 0, "accepted": a liblocation
+  client that asks for the privacy disclaimer while the dialog is still
+  open is told so and sets the disclaimer accepted without the user. So
+  the plugin keeps its control until the dialog is answered instead of
+  making a new one, and gpsd does not run before that. Both bugs are fixed
+  in the `+pro1x1` builds of liblocation0 and location-ui that
+  [pro1x-maemo-leste](https://github.com/smatkovi/pro1x-maemo-leste) makes
+  (`patches/fixes`, `scripts/49-hidpi.sh`).
 - **Screen blanking.** While Pure Maps navigates it keeps the display on.
   Upstream does this through `org.freedesktop.ScreenSaver`, which Leste does
   not have. The Leste package asks MCE (`req_display_blanking_pause`)
