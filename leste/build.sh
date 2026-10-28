@@ -6,7 +6,7 @@
 # made from leste/Dockerfile; the packages are made in that image, through
 # qemu, with their dependencies from dpkg -S. The .deb files go to work/out.
 #
-#   bash leste/build.sh [maplibre-native-qt|mapbox-gl-qml|pure-maps ...]
+#   bash leste/build.sh [maplibre-native-qt|mapbox-gl-qml|pure-maps|valhalla|osmscout-server ...]
 set -euo pipefail
 TOP=$(cd "$(dirname "$0")/.." && pwd)
 . "$TOP/versions.sh"
@@ -283,15 +283,54 @@ if want libpostal "$@"; then
 	autotools_part libpostal libpostal --disable-data-download --disable-sse2 \
 	    --enable-static --disable-shared --with-pic
 fi
+if want valhalla "$@"; then
+	# OSM Scout Server's routing: Valhalla's library only, static (in the
+	# server), as Flathub builds it. Its generated protobuf code has to
+	# match the protobuf library it links: the root's protoc (3.21, as its
+	# libprotobuf-lite), run through qemu.
+	src valhalla "$VALHALLA_URL" "$VALHALLA_REV"
+	mkdir -p "$W/bin"
+	printf '#!/bin/sh\nexec qemu-aarch64-static -L "%s" "%s/usr/bin/protoc" "$@"\n' \
+	    "$LESTE_SYSROOT" "$LESTE_SYSROOT" > "$W/bin/protoc-leste"
+	chmod 755 "$W/bin/protoc-leste"
+	cmake_part valhalla -DBUILD_SHARED_LIBS=OFF -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
+	    -DENABLE_TOOLS=OFF -DENABLE_DATA_TOOLS=OFF -DENABLE_SERVICES=OFF -DENABLE_HTTP=OFF \
+	    -DENABLE_PYTHON_BINDINGS=OFF -DENABLE_TESTS=OFF -DENABLE_BENCHMARKS=OFF \
+	    -DENABLE_CCACHE=OFF -DENABLE_WERROR=OFF -DENABLE_SINGLE_FILES_WERROR=OFF \
+	    -DProtobuf_PROTOC_EXECUTABLE="$W/bin/protoc-leste" -DVALHALLA_NO_PKGCONFIG=ON
+	# Valhalla's headers include rapidjson's and date's, which it does not
+	# install; a pkg-config file for linking it statically (its own names
+	# the build's paths; qmake asks pkg-config without --static, so the
+	# libraries are in Requires and Libs)
+	r=$W/root/valhalla
+	rm -rf "$r/usr/include/robin_hood.h" "$r/usr/include/cpp-statsd-client" \
+	    "$r/usr/lib/aarch64-linux-gnu/cmake/robin_hood" "$r/usr/share/cpp-statsd-client"
+	mkdir -p "$r/usr/include/valhalla/third_party"
+	cp -a "$W/src/valhalla/third_party/rapidjson/include/rapidjson" \
+	    "$W/src/valhalla/third_party/date/include/date" "$r/usr/include/valhalla/third_party/"
+	mkdir -p "$r/usr/lib/aarch64-linux-gnu/pkgconfig"
+	cat > "$r/usr/lib/aarch64-linux-gnu/pkgconfig/libvalhalla.pc" <<-PC
+	prefix=/usr
+	libdir=\${prefix}/lib/aarch64-linux-gnu
+	includedir=\${prefix}/include
+
+	Name: libvalhalla
+	Description: Valhalla routing library (static)
+	Version: $VALHALLA_VERSION
+	Requires: protobuf-lite zlib
+	Libs: -L\${libdir} -lvalhalla -pthread
+	Cflags: -I\${includedir} -I\${includedir}/valhalla/third_party
+	PC
+	cp -a "$r/." "$LESTE_SYSROOT/"
+fi
 if want osmscout-server "$@"; then
-	# offline maps, search and (later) routing for Pure Maps: vector tiles
-	# for MapLibre (no Mapnik raster tiles), no Valhalla yet, no systemd
+	# offline maps, search and routing for Pure Maps: vector tiles for
+	# MapLibre (no Mapnik raster tiles), Valhalla (above), no systemd
 	# (Leste has none): started through D-Bus
 	src osmscout-server "$OSMSCOUT_URL" "$OSMSCOUT_REV"
 	qmake_part osmscout-server osmscout-server.pro PREFIX=/usr SCOUT_FLAVOR=kirigami \
-	    CONFIG+=disable_mapnik CONFIG+=disable_valhalla CONFIG+=disable_systemd \
-	    CONFIG+=use_dbusactivation
-	RECOMMENDS="pure-maps" deb osmscout-server osmscout-server "$OSMSCOUT_VERSION" utils \
+	    CONFIG+=disable_mapnik CONFIG+=disable_systemd CONFIG+=use_dbusactivation
+	PKGREV=$OSMSCOUT_PKGREV RECOMMENDS="pure-maps" deb osmscout-server osmscout-server "$OSMSCOUT_VERSION" utils \
 	    "qml-module-org-kde-kirigami2, qml-module-qtquick2, qml-module-qtquick-controls2, qml-module-qtquick-layouts, qml-module-qtquick-window2, qml-module-qtquick-dialogs, qml-module-qt-labs-settings, qml-module-qt-labs-folderlistmodel, qml-module-qtpositioning" \
 	    "Offline maps, search and routing server for Pure Maps (OpenStreetMap)"
 fi

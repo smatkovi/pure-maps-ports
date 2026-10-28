@@ -21,3 +21,11 @@ OSMSCOUT_REV=3.1.7
 OSMSCOUT_VERSION=3.1.7
 LIBPOSTAL_URL=https://github.com/rinigus/pkg-libpostal.git
 LIBPOSTAL_REV=69d0561b3d367c2db1dd7db1c4d652b865b8f83c
+# Valhalla (OSM Scout Server's routing) as its packagings build it
+# (rinigus' pkg-valhalla-lite 3.4.0.5, Flathub's valhalla-lite)
+VALHALLA_URL=https://github.com/valhalla/valhalla.git
+VALHALLA_REV=3.4.0
+VALHALLA_VERSION=3.4.0
+# OSM Scout Server's own package revision: 2 with Valhalla (the other
+# packages stay at PKGREV)
+OSMSCOUT_PKGREV=2
