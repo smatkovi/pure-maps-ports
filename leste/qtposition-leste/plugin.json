@@ -1,0 +1,9 @@
+{
+    "Keys": ["leste"],
+    "Provider": "leste",
+    "Position": true,
+    "Satellite": false,
+    "Monitor": false,
+    "Priority": 1200,
+    "Testable": false
+}

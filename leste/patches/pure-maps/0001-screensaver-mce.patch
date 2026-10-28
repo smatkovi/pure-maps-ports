@@ -1,0 +1,77 @@
+diff --git a/qml/platform.qtcontrols/ScreenSaver.qml b/qml/platform.qtcontrols/ScreenSaver.qml
+index e6379e8d..384ac694 100644
+--- a/qml/platform.qtcontrols/ScreenSaver.qml
++++ b/qml/platform.qtcontrols/ScreenSaver.qml
+@@ -19,6 +19,9 @@
+ import QtQuick 2.0
+ import Nemo.DBus 2.0
+ 
++// Maemo Leste: the display is MCE's (there is no org.freedesktop.ScreenSaver);
++// a blanking pause keeps it on for a minute, so it is asked for again while
++// blanking is to be prevented
+ Item {
+     id: saver
+ 
+@@ -27,51 +30,18 @@ Item {
+     property string reason
+ 
+     DBusInterface {
+-        id: bus
+-        service: "org.freedesktop.ScreenSaver"
+-        path: "/org/freedesktop/ScreenSaver"
+-        iface: "org.freedesktop.ScreenSaver"
+-
+-        property int  cookie: 0
+-        property bool error: false
+-        property bool inhibited: false
+-
+-        onErrorChanged: {
+-            if (error) console.log('DBus connection with Screen Saver has switched to Error state');
+-        }
+-
+-        function inhibit() {
+-            if (inhibited || error) return;
+-            call("Inhibit", [name, reason],
+-                 function(result) {
+-                     cookie = result;
+-                     inhibited = true;
+-                 },
+-                 function(error, message) {
+-                     console.log("Error while calling Screensaver Inhibit");
+-                     console.log("Call failed", error, "message:", message);
+-                     cookie = 0;
+-                     inhibited = false;
+-                     bus.error = true;
+-                 });
+-        }
+-
+-        function uninhibit() {
+-            if (!inhibited || error) return;
+-            typedCall("UnInhibit", [{'type': 'u', 'value': cookie}],
+-                      function(result) {
+-                          inhibited = false;
+-                      },
+-                      function(error, message) {
+-                          console.log("Error while calling ScreenSaver UnInhibit");
+-                          console.log("Call failed", error, "message:", message);
+-                          bus.error = true;
+-                      });
+-        }
++        id: mce
++        bus: DBus.SystemBus
++        service: "com.nokia.mce"
++        path: "/com/nokia/mce/request"
++        iface: "com.nokia.mce.request"
+     }
+ 
+-    onPreventBlankingChanged: {
+-        if (preventBlanking) bus.inhibit();
+-        else bus.uninhibit();
++    Timer {
++        interval: 30000
++        repeat: true
++        running: saver.preventBlanking
++        triggeredOnStart: true
++        onTriggered: mce.call("req_display_blanking_pause", [])
+     }
+ }

@@ -1,0 +1,11 @@
+[Desktop Entry]
+Encoding=UTF-8
+Version=1.0
+Type=Application
+Name=Pure Maps
+Comment=Maps and navigation
+Exec=/usr/bin/pure-maps-hildon
+Icon=io.github.rinigus.PureMaps
+Terminal=false
+Categories=Utility;Maps;
+X-Osso-Type=application/x-executable
