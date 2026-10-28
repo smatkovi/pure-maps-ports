@@ -1,0 +1,11 @@
+[Desktop Entry]
+Encoding=UTF-8
+Version=1.0
+Type=Application
+Name=OSM Scout Server
+Comment=Offline maps, search and routing for Pure Maps
+Exec=/usr/bin/osmscout-server-hildon
+Icon=osmscout-server
+Terminal=false
+Categories=Utility;Maps;
+X-Osso-Type=application/x-executable

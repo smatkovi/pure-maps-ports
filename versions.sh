@@ -15,3 +15,9 @@ NEMODBUS_REV=2.1.27
 NEMODBUS_VERSION=2.1.27
 # the Qt Positioning plugin of this repository (leste/qtposition-leste)
 QTPOSITIONLESTE_VERSION=0.1.0
+# OSM Scout Server and libpostal as its packagings pin it (Flathub's)
+OSMSCOUT_URL=https://github.com/rinigus/osmscout-server.git
+OSMSCOUT_REV=3.1.7
+OSMSCOUT_VERSION=3.1.7
+LIBPOSTAL_URL=https://github.com/rinigus/pkg-libpostal.git
+LIBPOSTAL_REV=69d0561b3d367c2db1dd7db1c4d652b865b8f83c

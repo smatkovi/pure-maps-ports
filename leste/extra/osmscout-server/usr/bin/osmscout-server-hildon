@@ -1,0 +1,8 @@
+#!/bin/sh
+# OSM Scout Server's settings and map manager from the Hildon menu:
+# Kirigami's touch layout and a Qt Quick Controls style that has touch
+# sized controls (both can be overridden)
+: "${QT_QUICK_CONTROLS_MOBILE:=1}"
+: "${QT_QUICK_CONTROLS_STYLE:=Material}"
+export QT_QUICK_CONTROLS_MOBILE QT_QUICK_CONTROLS_STYLE
+exec /usr/bin/osmscout-server-gui "$@"

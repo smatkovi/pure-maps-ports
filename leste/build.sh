@@ -56,10 +56,12 @@ src() {
 	git -C "$d" checkout -q -f "$rev"
 	# only the pinned commits: maplibre-native's full history is over 6 GB
 	git -C "$d" submodule update -q --init --recursive --depth 1 --jobs 8
-	# what Leste needs changed (checkout -f above took the last run's back)
+	# what Leste needs changed, also in submodules (the last run's changes
+	# undone first)
+	git -C "$d" submodule foreach -q --recursive 'git checkout -q -f .'
 	local p
 	for p in "$TOP/leste/patches/$name"/*.patch; do
-		[ -f "$p" ] && git -C "$d" apply "$p"
+		[ -f "$p" ] && patch -s -p1 -d "$d" < "$p"
 	done
 	return 0
 }
@@ -157,6 +159,31 @@ qmake_part() {
 	cp -a "$r/." "$LESTE_SYSROOT/"
 }
 
+# autotools_part NAME DIR [configure arguments]: as cmake_part, for the
+# autotools project in DIR of NAME's source
+autotools_part() {
+	local name=$1 s=$W/src/$1/$2 b=$W/build/$1 r=$W/root/$1
+	shift 2
+	log "$name"
+	[ -x "$s/configure" ] || (cd "$s" && autoreconf -fi) > "$W/$name.autoreconf.log" 2>&1 ||
+	    { tail -20 "$W/$name.autoreconf.log"; exit 1; }
+	mkdir -p "$b"
+	(cd "$b" && "$s/configure" --host=aarch64-linux-gnu --build="$(uname -m)-linux-gnu" \
+	    --prefix=/usr --libdir=/usr/lib/aarch64-linux-gnu \
+	    CC="clang --target=aarch64-linux-gnu --sysroot=$LESTE_SYSROOT" \
+	    CXX="clang++ --target=aarch64-linux-gnu --sysroot=$LESTE_SYSROOT" \
+	    LDFLAGS=-fuse-ld=lld AR=llvm-ar RANLIB=llvm-ranlib NM=llvm-nm STRIP=llvm-strip \
+	    "$@") > "$W/$name.configure.log" 2>&1 ||
+	    { tail -30 "$W/$name.configure.log"; exit 1; }
+	# AT_MAKE, AT_INSTALL: other make arguments, for a part of the project
+	make -C "$b" -j"$JOBS" ${AT_MAKE:-} > "$W/$name.build.log" 2>&1 ||
+	    { grep -m25 -E "error:|Error [0-9]" "$W/$name.build.log"; exit 1; }
+	rm -rf "$r"
+	make -C "$b" ${AT_INSTALL:-install} DESTDIR="$r" > "$W/$name.install.log" 2>&1 ||
+	    { tail -20 "$W/$name.install.log"; exit 1; }
+	cp -a "$r/." "$LESTE_SYSROOT/"
+}
+
 # deb NAME PACKAGE VERSION SECTION "extra Depends" "Description" [files...]:
 # a package of work/root/NAME (or only the files given, relative to it);
 # the libraries the ELF files need are found with dpkg -S in the image
@@ -245,5 +272,27 @@ if want pure-maps "$@"; then
 	RECOMMENDS="espeak-ng | flite" deb pure-maps pure-maps "$PUREMAPS_VERSION" utils \
 	    "qml-module-mapboxmap (= $MAPBOXGLQML_VERSION-$PKGREV), qml-module-nemo-dbus (= $NEMODBUS_VERSION-$PKGREV), python3, qml-module-io-thp-pyotherside, qml-module-org-kde-kirigami2, qml-module-qtpositioning, libqt5positioning5-plugin-leste (>= $QTPOSITIONLESTE_VERSION), qml-module-qtquick2, qml-module-qtquick-controls2, qml-module-qtquick-dialogs, qml-module-qtquick-layouts, qml-module-qtquick-window2, qml-module-qtgraphicaleffects, qml-module-qt-labs-settings, qml-module-qtmultimedia, qml-module-qtsensors" \
 	    "Maps and navigation (OpenStreetMap, online or with OSM Scout Server)"
+fi
+if want libpostal "$@"; then
+	# address parsing for OSM Scout Server's search: static, in the server
+	# (as Sailfish OS has it); its data the server downloads with the maps
+	src libpostal "$LIBPOSTAL_URL" "$LIBPOSTAL_REV"
+	# only the library (not its training tools)
+	AT_MAKE="-C src libpostal.la" \
+	AT_INSTALL="-C src install-libLTLIBRARIES install-pkgincludeHEADERS" \
+	autotools_part libpostal libpostal --disable-data-download --disable-sse2 \
+	    --enable-static --disable-shared --with-pic
+fi
+if want osmscout-server "$@"; then
+	# offline maps, search and (later) routing for Pure Maps: vector tiles
+	# for MapLibre (no Mapnik raster tiles), no Valhalla yet, no systemd
+	# (Leste has none): started through D-Bus
+	src osmscout-server "$OSMSCOUT_URL" "$OSMSCOUT_REV"
+	qmake_part osmscout-server osmscout-server.pro PREFIX=/usr SCOUT_FLAVOR=kirigami \
+	    CONFIG+=disable_mapnik CONFIG+=disable_valhalla CONFIG+=disable_systemd \
+	    CONFIG+=use_dbusactivation
+	RECOMMENDS="pure-maps" deb osmscout-server osmscout-server "$OSMSCOUT_VERSION" utils \
+	    "qml-module-org-kde-kirigami2, qml-module-qtquick2, qml-module-qtquick-controls2, qml-module-qtquick-layouts, qml-module-qtquick-window2, qml-module-qtquick-dialogs, qml-module-qt-labs-settings, qml-module-qt-labs-folderlistmodel, qml-module-qtpositioning" \
+	    "Offline maps, search and routing server for Pure Maps (OpenStreetMap)"
 fi
 log "done: $W/out"
