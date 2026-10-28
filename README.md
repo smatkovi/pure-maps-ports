@@ -4,7 +4,8 @@ Packages of [Pure Maps](https://github.com/rinigus/pure-maps) (maps and
 navigation on OpenStreetMap data) and
 [OSM Scout Server](https://github.com/rinigus/osmscout-server) (its offline
 maps and search) for **Maemo Leste** (arm64, Hildon) and **FreeBSD**
-(arm64), with what the distributions do not have:
+(arm64, MeeGo's home and Hildon; see [FreeBSD](#freebsd)), with what the
+distributions do not have. For Leste:
 
 | Package (Leste) | What it is |
 | --- | --- |
@@ -53,6 +54,35 @@ yet. Its "Mixed" profile can take the map and search from the server and
 route online, for example with OSRM. [libpostal](https://github.com/openvenues/libpostal)
 (the address parser, in rinigus' pinned 2017 version) is linked into the
 server statically.
+
+## FreeBSD
+
+The FreeBSD packages (FreeBSD 15, arm64) are in the same releases:
+`maplibre-native-qt`, `mapbox-gl-qml`, `nemo-qml-plugin-dbus` and `pure-maps`
+in Pure Maps' release, `osmscout-server` in its own. They are built in
+[pro1x-maemo-leste](https://github.com/smatkovi/pro1x-maemo-leste)'s
+FreeBSD cross build (`freebsd/hildon/apps.sh`), where FreeBSD's own
+packages provide the rest (Kirigami, PyOtherSide, s2, libpostal,
+kyotocabinet, marisa-trie, libmicrohttpd). Install their dependencies
+from FreeBSD's repository, then the packages:
+
+```sh
+pkg install python312 pyotherside-qt5 kf5-kirigami2 s2 qt5-location \
+    qt5-quickcontrols qt5-quickcontrols2 qt5-graphicaleffects qt5-multimedia \
+    qt5-sensors qt5-sqldrivers-sqlite3 espeak-ng kyotocabinet marisa-trie \
+    libmicrohttpd libpostal
+pkg add maplibre-native-qt-3.0.0.pkg nemo-qml-plugin-dbus-2.1.27.pkg \
+    mapbox-gl-qml-3.0.0.79.pkg pure-maps-3.5.1.pkg osmscout-server-3.1.7.pkg
+```
+
+Both apps have menu entries for MeeGo's home (the normal XDG ones) and for
+Hildon. They start `pure-maps-mobile` and `osmscout-server-mobile`, with
+Kirigami's touch layout. `pure-maps-mobile` also preloads libpython:
+FreeBSD's Python modules are not linked to libpython, and PyOtherSide
+loads libpython only for itself, so `math` and `datetime` would not load.
+Tested in a FreeBSD 15.1 arm64 VM: Pure Maps shows the map, OSM Scout
+Server's settings open and the server listens on port 8553. Positioning
+on FreeBSD is Qt's own (GeoClue 2 if it runs).
 
 ## What is different on Leste
 
