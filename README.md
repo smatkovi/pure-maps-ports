@@ -1,8 +1,10 @@
 # Pure Maps for Maemo Leste and FreeBSD
 
 Packages of [Pure Maps](https://github.com/rinigus/pure-maps) (maps and
-navigation on OpenStreetMap data) for **Maemo Leste** (arm64, Hildon) and
-**FreeBSD** (arm64), with what the distributions do not have:
+navigation on OpenStreetMap data) and
+[OSM Scout Server](https://github.com/rinigus/osmscout-server) (its offline
+maps and search) for **Maemo Leste** (arm64, Hildon) and **FreeBSD**
+(arm64), with what the distributions do not have:
 
 | Package (Leste) | What it is |
 | --- | --- |
@@ -11,6 +13,7 @@ navigation on OpenStreetMap data) for **Maemo Leste** (arm64, Hildon) and
 | `libqmaplibre3`, `libqmaplibre-dev` | [MapLibre Native Qt](https://github.com/maplibre/maplibre-native-qt) 3.0.0, the map renderer |
 | `qml-module-nemo-dbus` | [Nemo.DBus](https://github.com/sailfishos/nemo-qml-plugin-dbus) 2.1.27 (D-Bus for QML) |
 | `libqt5positioning5-plugin-leste` | GPS for Qt programs from Leste's location-daemon (written here) |
+| `osmscout-server` | OSM Scout Server 3.1.7, the Kirigami version, with a Hildon menu entry |
 
 Everything else Pure Maps needs (Kirigami, PyOtherSide, Qt's QML modules,
 s2geometry) comes from Leste's own repositories; `apt` installs it.
@@ -28,6 +31,28 @@ Pure Maps is then in the Hildon menu. Its default map (OpenFreeMap) and
 search (Photon) work without an account. Its default router, Stadia Maps,
 needs an API key of your own (entered in Pure Maps' preferences). OSRM
 routes without one.
+
+## Offline maps: OSM Scout Server
+
+```sh
+sudo apt install ./osmscout-server_*.deb
+```
+
+Its menu entry opens the server's settings and map manager. A first-run
+wizard chooses the languages for search and then the countries to download.
+The data is large: for Austria about 2.8 GB of vector tiles, 330 MB for
+search and 26 MB of address-parser data, plus 106 MB of the address parser's
+global data once. Pure Maps uses the server when its "Offline" profile is
+selected (or for single services in "Mixed"). The server starts by itself
+(D-Bus activation) and listens on `127.0.0.1:8553`.
+
+This build has offline maps (vector tiles for MapLibre) and offline search.
+Offline routing (Valhalla) and raster tiles (Mapnik) are not in it yet. Pure
+Maps' "Offline" profile routes through the server too, so it cannot route
+yet. Its "Mixed" profile can take the map and search from the server and
+route online, for example with OSRM. [libpostal](https://github.com/openvenues/libpostal)
+(the address parser, in rinigus' pinned 2017 version) is linked into the
+server statically.
 
 ## What is different on Leste
 
