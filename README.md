@@ -14,7 +14,7 @@ distributions do not have. For Leste:
 | `libqmaplibre3`, `libqmaplibre-dev` | [MapLibre Native Qt](https://github.com/maplibre/maplibre-native-qt) 3.0.0, the map renderer |
 | `qml-module-nemo-dbus` | [Nemo.DBus](https://github.com/sailfishos/nemo-qml-plugin-dbus) 2.1.27 (D-Bus for QML) |
 | `libqt5positioning5-plugin-leste` | GPS for Qt programs from Leste's location-daemon (written here) |
-| `osmscout-server` | OSM Scout Server 3.1.7, the Kirigami version, with a Hildon menu entry |
+| `osmscout-server` | OSM Scout Server 3.1.7, the Kirigami version, with [Valhalla](https://github.com/valhalla/valhalla) 3.4.0 for offline routing and a Hildon menu entry |
 
 Everything else Pure Maps needs (Kirigami, PyOtherSide, Qt's QML modules,
 s2geometry) comes from Leste's own repositories; `apt` installs it.
@@ -41,19 +41,25 @@ sudo apt install ./osmscout-server_*.deb
 
 Its menu entry opens the server's settings and map manager. A first-run
 wizard chooses the languages for search and then the countries to download.
-The data is large: for Austria about 2.8 GB of vector tiles, 330 MB for
-search and 26 MB of address-parser data, plus 106 MB of the address parser's
-global data once. Pure Maps uses the server when its "Offline" profile is
-selected (or for single services in "Mixed"). The server starts by itself
-(D-Bus activation) and listens on `127.0.0.1:8553`.
+The data is large: for Austria about 2.8 GB of vector tiles, 740 MB for
+routing, 330 MB for search and 26 MB of address-parser data, plus 106 MB of
+the address parser's global data once. Pure Maps uses the server when its
+"Offline" profile is selected (or for single services in "Mixed"). The
+server starts by itself (D-Bus activation) and listens on `127.0.0.1:8553`.
 
-This build has offline maps (vector tiles for MapLibre) and offline search.
-Offline routing (Valhalla) and raster tiles (Mapnik) are not in it yet. Pure
-Maps' "Offline" profile routes through the server too, so it cannot route
-yet. Its "Mixed" profile can take the map and search from the server and
-route online, for example with OSRM. [libpostal](https://github.com/openvenues/libpostal)
-(the address parser, in rinigus' pinned 2017 version) is linked into the
+This build has offline maps (vector tiles for MapLibre), offline search and,
+since 3.1.7-2, offline routing: Valhalla 3.4.0, the version OSM Scout
+Server's own packagings build and its routing data is made for. Tried on the
+Pro1X under Leste: Liechtenstein downloaded through the server, a route
+across Vaduz with its turn instructions. Raster tiles (Mapnik) are not in
+it. [libpostal](https://github.com/openvenues/libpostal) (the address
+parser, in rinigus' pinned 2017 version) and Valhalla are linked into the
 server statically.
+
+After an upgrade from 3.1.7-1: that build offered only the "custom" profile
+in the server's settings, with Mapnik's data on (which 3.1.7-2 turns off,
+since it cannot use it) and the vector tiles off. Choose the default
+profile (Mapbox GL, geocoder-nlp, Valhalla) there.
 
 ## FreeBSD
 
@@ -72,7 +78,7 @@ pkg install python312 pyotherside-qt5 kf5-kirigami2 s2 qt5-location \
     qt5-sensors qt5-sqldrivers-sqlite3 espeak-ng kyotocabinet marisa-trie \
     libmicrohttpd libpostal
 pkg add maplibre-native-qt-3.0.0.pkg nemo-qml-plugin-dbus-2.1.27.pkg \
-    mapbox-gl-qml-3.0.0.79.pkg pure-maps-3.5.1.pkg osmscout-server-3.1.7.pkg
+    mapbox-gl-qml-3.0.0.79.pkg pure-maps-3.5.1.pkg osmscout-server-3.1.7_1.pkg
 ```
 
 Both apps have menu entries for MeeGo's home (the normal XDG ones) and for
@@ -122,8 +128,10 @@ on FreeBSD is Qt's own (GeoClue 2 if it runs).
 The Leste packages are cross compiled on an x86-64 Linux PC with clang
 against an arm64 Debian 12 root. Leste's libraries are Devuan daedalus',
 which are Debian 12's. The root is made from `leste/Dockerfile` (Docker
-with qemu-user for arm64). The `.deb` files are made in that root, with
-their dependencies found by `dpkg -S`:
+with qemu-user for arm64). Valhalla's generated protobuf code comes from
+that root's own protoc (3.21, as its libprotobuf-lite), run through qemu.
+The `.deb` files are made in that root, with their dependencies found by
+`dpkg -S`:
 
 ```sh
 bash leste/build.sh            # everything, packages in work/out
